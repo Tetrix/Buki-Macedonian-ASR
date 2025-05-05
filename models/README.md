@@ -1,12 +1,12 @@
 The models are developed using the SpeechBrain toolkit.
 
-To train the models, you need to run: python train.py hyperparams.yaml
+To train the models, you need to run: `python train.py hyperparams.yaml`
 
 The trained models are available on Huggingface:
 Wav2vec2: https://huggingface.co/Macedonian-ASR/buki-wav2vec2-2.0/tree/main
 Whisper: https://huggingface.co/Macedonian-ASR/buki-whisper-2.0
 
-To run unference with the model, use:
+To run inference with the Whisper model, use:
 
 ```
 from speechbrain.inference.interfaces import foreign_class
