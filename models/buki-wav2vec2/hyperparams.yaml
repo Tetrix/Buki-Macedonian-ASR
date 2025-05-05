@@ -1,0 +1,156 @@
+# Hparams NEEDED
+HPARAMS_NEEDED: ["wav2vec_output_dim", "emb_size", "dec_neurons", "dec_layers", "output_neurons", "log_softmax", "tokenizer"]
+# Modules Needed
+MODULES_NEEDED: ["encoder_w2v2", "embedding", "ctc_lin", "seq_lin", "lm_model"]
+
+# Pretrain folder (HuggingFace)
+output_folder: !ref buki_2_wav2vec2/output_folder_wav2vec2
+pretrained_path: Macedonian-ASR/buki-wav2vec2-2.0
+# wav2vec2_hub: facebook/wav2vec2-large-xlsr-53
+wav2vec2_hub: jonatasgrosman/wav2vec2-large-xlsr-53-russian
+save_folder: !ref <output_folder>/save
+wav2vec2_folder: !ref <save_folder>/wav2vec2_checkpoint
+
+####################### Training Parameters ####################################
+
+####################### Model Parameters #######################################
+dropout: 0.15
+wav2vec_output_dim: 1024
+emb_size: 128
+dec_neurons: 1024
+dec_layers: 1
+
+output_neurons: 1000
+blank_index: 0
+bos_index: 1
+eos_index: 2
+unk_index: 0
+
+# Decoding parameters
+min_decode_ratio: 0.0
+max_decode_ratio: 1.0
+valid_beam_size: 10
+test_beam_size: 20
+using_eos_threshold: True
+eos_threshold: 2.2
+using_max_attn_shift: False
+max_attn_shift: 300
+length_normalization: True
+temperature: 1.0
+temperature_lm: 1.4
+# Scoring parameters
+coverage_penalty: 1.5
+lm_weight: 0.3 # disabled
+
+
+# This is the RNNLM that is used according to the Huggingface repository
+# NB: It has to match the pre-trained RNNLM!!
+lm_model: !new:speechbrain.lobes.models.RNNLM.RNNLM
+  output_neurons: !ref <output_neurons>
+  embedding_dim: !ref <emb_size>
+  activation: !name:torch.nn.LeakyReLU
+  dropout: 0.0
+  rnn_layers: 3
+  rnn_neurons: 2048
+  dnn_blocks: 2
+  dnn_neurons: 1024
+  return_hidden: True  # For inference
+
+# Wav2vec2 encoder
+encoder_w2v2: !new:speechbrain.lobes.models.huggingface_transformers.wav2vec2.Wav2Vec2
+    source: !ref <wav2vec2_hub>
+    output_norm: True
+    freeze: False
+    freeze_feature_extractor: True
+    save_path: !ref <wav2vec2_folder>
+    output_all_hiddens: False
+
+embedding: !new:speechbrain.nnet.embedding.Embedding
+   num_embeddings: !ref <output_neurons>
+   embedding_dim: !ref <emb_size>
+
+# Attention-based RNN decoder.
+decoder: !new:speechbrain.nnet.RNN.AttentionalRNNDecoder
+    enc_dim: !ref <wav2vec_output_dim>
+    input_size: !ref <emb_size>
+    rnn_type: gru
+    attn_type: location
+    hidden_size: !ref <dec_neurons>
+    attn_dim: 512
+    num_layers: !ref <dec_layers>
+    scaling: 1.0
+    channels: 10
+    kernel_size: 100
+    re_init: True
+    dropout: !ref <dropout>
+
+ctc_lin: !new:speechbrain.nnet.linear.Linear
+   input_size: !ref <wav2vec_output_dim>
+   n_neurons: !ref <output_neurons>
+
+seq_lin: !new:speechbrain.nnet.linear.Linear
+   input_size: !ref <dec_neurons>
+   n_neurons: !ref <output_neurons>
+
+log_softmax: !new:speechbrain.nnet.activations.Softmax
+   apply_log: True
+
+tokenizer: !new:sentencepiece.SentencePieceProcessor
+  model_file: 1000_unigram.model
+
+modules:
+   encoder_w2v2: !ref <encoder_w2v2>
+   embedding: !ref <embedding>
+   decoder: !ref <decoder>
+   ctc_lin: !ref <ctc_lin>
+   seq_lin: !ref <seq_lin>
+   lm_model: !ref <lm_model>
+
+model: !new:torch.nn.ModuleList
+   - [!ref <encoder_w2v2>, !ref <embedding>, !ref <decoder>, !ref <ctc_lin>, !ref <seq_lin>]
+
+############################## Decoding & optimiser ############################
+coverage_scorer: !new:speechbrain.decoders.scorer.CoverageScorer
+  vocab_size: !ref <output_neurons>
+
+rnnlm_scorer: !new:speechbrain.decoders.scorer.RNNLMScorer
+  language_model: !ref <lm_model>
+  temperature: !ref <temperature_lm>
+
+scorer: !new:speechbrain.decoders.scorer.ScorerBuilder
+  full_scorers: [!ref <coverage_scorer>]
+  weights:
+     coverage: !ref <coverage_penalty>
+
+scorer_lm: !new:speechbrain.decoders.scorer.ScorerBuilder
+  full_scorers: [!ref <rnnlm_scorer>,
+                 !ref <coverage_scorer>]
+  weights:
+     rnnlm: !ref <lm_weight>
+     coverage: !ref <coverage_penalty>
+
+test_search: !new:speechbrain.decoders.S2SRNNBeamSearcher
+    embedding: !ref <embedding>
+    decoder: !ref <decoder>
+    linear: !ref <seq_lin>
+    bos_index: !ref <bos_index>
+    eos_index: !ref <eos_index>
+    min_decode_ratio: !ref <min_decode_ratio>
+    max_decode_ratio: !ref <max_decode_ratio>
+    beam_size: !ref <test_beam_size>
+    eos_threshold: !ref <eos_threshold>
+    using_max_attn_shift: !ref <using_max_attn_shift>
+    max_attn_shift: !ref <max_attn_shift>
+    temperature: !ref <temperature>
+    scorer: !ref <scorer>
+
+
+############################## Logging and Pretrainer ##########################
+
+pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
+    loadables:
+        model: !ref <model>
+        lm: !ref <lm_model>
+    paths:
+        model: !ref <pretrained_path>/model.ckpt
+        lm: !ref <pretrained_path>/lm.ckpt
